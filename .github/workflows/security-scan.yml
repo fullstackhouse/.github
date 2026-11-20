@@ -1,0 +1,125 @@
+# Reusable security gate (FSH security roadmap CI6: SE2 gitleaks, DP5 Semgrep).
+#
+# Baseline-and-regression, not pass/fail (SPEC-021 KDD 13): both scanners look only at
+# what this PR (or push) adds, so old findings never block. Tools are pinned by checksum
+# or digest, not by a tag someone could move.
+#
+# Caller:
+#   jobs:
+#     security:
+#       uses: fullstackhouse/.github/.github/workflows/security-scan.yml@<commit-sha> # main
+#       permissions: { contents: read }
+# The required status check is "security / result".
+
+name: security-scan
+
+on:
+  workflow_call:
+    inputs:
+      semgrep-configs:
+        description: Space-separated Semgrep rulesets.
+        type: string
+        default: p/typescript p/nodejs p/secrets
+
+permissions: {}
+
+env:
+  GITLEAKS_VERSION: 8.30.1
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+  SEMGREP_IMAGE: semgrep/semgrep:1.186.0@sha256:6e1b04340e60e910fbb4ddbf3c857ab0918f064417ad5ac530014ccb3cf8c8f1
+
+jobs:
+  range:
+    runs-on: ubuntu-latest # github-runner: sub-minute glue, no checkout
+    permissions: {}
+    outputs:
+      base: ${{ steps.r.outputs.base }}
+      head: ${{ steps.r.outputs.head }}
+    steps:
+      # What this run adds: the PR's commits, or the commits of a push. A brand-new branch
+      # push has no "before", so it falls back to the head commit alone.
+      - id: r
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == pull_request* ]]; then
+            base="$PR_BASE"; head="$PR_HEAD"
+          elif [[ -n "$BEFORE" && "$BEFORE" != 0000000000000000000000000000000000000000 ]]; then
+            base="$BEFORE"; head="$SHA"
+          else
+            base=""; head="$SHA"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "Scanning ${base:-<head only>}..$head"
+
+  gitleaks:
+    needs: range
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSLO "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" gitleaks && sudo mv gitleaks /usr/local/bin/
+      # A hit here means the secret is already in git history on GitHub: rotate it, don't
+      # just delete it (docs/security/roadmap.md SE2). False positive: add a
+      # `gitleaks:allow` comment on the line or a .gitleaksignore fingerprint.
+      - name: Scan new commits for secrets
+        env:
+          BASE: ${{ needs.range.outputs.base }}
+          HEAD: ${{ needs.range.outputs.head }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$BASE" ]]; then range="${BASE}..${HEAD}"; else range="-1 ${HEAD}"; fi
+          gitleaks git --log-opts="$range" --redact --no-banner --exit-code 1 .
+
+  semgrep:
+    needs: range
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Reports only findings that are new against the base commit, so existing code never
+      # blocks a PR. A push with no base (new branch) scans for the record but never fails.
+      - name: Semgrep (new findings only)
+        env:
+          BASE: ${{ needs.range.outputs.base }}
+          CONFIGS: ${{ inputs.semgrep-configs }}
+        run: |
+          set -euo pipefail
+          args=(scan --metrics=off --quiet)
+          for c in $CONFIGS; do args+=(--config "$c"); done
+          if [[ -n "$BASE" ]]; then args+=(--error --baseline-commit "$BASE"); fi
+          docker run --rm -v "$PWD:/src" -w /src -e SEMGREP_SEND_METRICS=off \
+            "$SEMGREP_IMAGE" sh -c 'git config --global --add safe.directory /src && semgrep "$@"' _ "${args[@]}"
+
+  # One stable check name for the org ruleset to require, whatever jobs live above it.
+  result:
+    if: always()
+    needs: [gitleaks, semgrep]
+    runs-on: ubuntu-latest # github-runner: sub-minute glue, no checkout
+    permissions: {}
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "gitleaks/semgrep: $RESULTS"
+          for r in $RESULTS; do [[ "$r" == success ]] || exit 1; done

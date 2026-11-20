@@ -1,0 +1,38 @@
+# Reusable OpenSSF Scorecard run (security roadmap CI5). The score is the number CI2/CI3
+# should move. Results go to the job summary; uploading SARIF to code scanning needs GHAS
+# on private repos (SPEC-021 KDD 14). Caller: a monthly schedule + workflow_dispatch job with `uses: fullstackhouse/.github/.github/workflows/scorecard.yml@<sha>` and the same permissions.
+name: scorecard
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  scorecard:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@23f22cd43608bae7a1f1fa2603d7314dee9538a5 # v2.6.0
+        with:
+          results_file: scorecard.json
+          results_format: json
+          publish_results: false
+      - name: Summary
+        run: |
+          set -euo pipefail
+          {
+            echo "### OpenSSF Scorecard: $(jq -r '.score' scorecard.json) / 10"
+            echo
+            echo "| Check | Score | Reason |"
+            echo "|---|---|---|"
+            jq -r '.checks | sort_by(.score) | .[] | "| \(.name) | \(.score) | \(.reason) |"' scorecard.json
+          } >> "$GITHUB_STEP_SUMMARY"

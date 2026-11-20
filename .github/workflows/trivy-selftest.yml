@@ -1,0 +1,42 @@
+name: trivy-selftest
+
+# Proves the trivy-image action fails on a known-bad image and passes on a clean one
+# (never-trust-a-green-check). Runs whenever the action changes.
+on:
+  pull_request:
+    paths:
+      - actions/trivy-image/**
+      - .github/workflows/trivy-selftest.yml
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest # github-runner: public repo, free hosted minutes; runs only when the action changes
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: node:18.0.0
+            expect: failure
+          - image: gcr.io/distroless/static-debian12:latest
+            expect: success
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: trivy
+        continue-on-error: true
+        uses: ./actions/trivy-image
+        with:
+          image: ${{ matrix.image }}
+      - name: Outcome matches expectation
+        env:
+          GOT: ${{ steps.trivy.outcome }}
+          WANT: ${{ matrix.expect }}
+        run: |
+          echo "trivy on ${{ matrix.image }}: $GOT (want $WANT)"
+          [[ "$GOT" == "$WANT" ]]

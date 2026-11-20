@@ -1,0 +1,42 @@
+# Image scan after build (security roadmap IN1). Runs in the job that built or pushed the
+# image, so it can read the same registry credentials.
+#   - uses: fullstackhouse/.github/actions/trivy-image@<commit-sha> # main
+#     with: { image: ghcr.io/org/app:tag }
+#
+# Fails only on a CRITICAL that has a fix available. HIGH and unfixed findings go to the
+# job summary. Accepted findings go in .trivyignore.yaml at the repo root, each with an
+# `expired_at` date and a `statement` saying why, so an exception can't outlive its excuse.
+name: trivy-image
+description: Scan a built container image with Trivy; fail on fixable CRITICALs.
+inputs:
+  image:
+    description: Image reference to scan (tag or digest).
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install Trivy
+      shell: bash
+      env:
+        TRIVY_VERSION: 0.76.2
+        TRIVY_SHA256: bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
+      run: |
+        set -euo pipefail
+        tarball="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+        curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${tarball}"
+        echo "${TRIVY_SHA256}  ${tarball}" | sha256sum -c -
+        tar -xzf "$tarball" trivy && sudo mv trivy /usr/local/bin/ && rm -f "$tarball"
+    - name: Scan image
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+      run: |
+        set -euo pipefail
+        ignore=()
+        [[ -f .trivyignore.yaml ]] && ignore=(--ignorefile .trivyignore.yaml)
+        report=$(mktemp)
+        trivy image --quiet --scanners vuln --severity CRITICAL,HIGH --format table \
+          "${ignore[@]}" "$IMAGE" > "$report" || true
+        { echo "### Trivy: \`$IMAGE\`"; echo '```'; cat "$report"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        trivy image --quiet --scanners vuln --severity CRITICAL --ignore-unfixed \
+          --exit-code 1 "${ignore[@]}" "$IMAGE"
