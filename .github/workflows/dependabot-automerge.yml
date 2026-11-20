@@ -1,0 +1,48 @@
+# Auto-merges low-risk Dependabot PRs once every required check passes (security roadmap
+# DP3 / A34: bot PRs must not go stale). Everything else is listed weekly for a human.
+#
+# Low risk = a patch or minor bump of a GitHub Action, or of a dev-only dependency.
+# Majors and runtime dependencies are never auto-merged.
+#
+# The PR is approved by github-actions[bot] (the main ruleset needs 1 approval) and queued
+# with `gh pr merge --auto`, so it merges only when the repo's required checks are green.
+# Needs "Allow auto-merge" on the repo.
+#
+# Caller:
+#   on: pull_request
+#   jobs:
+#     automerge:
+#       uses: fullstackhouse/.github/.github/workflows/dependabot-automerge.yml@<sha> # main
+#       permissions: { contents: write, pull-requests: write }
+name: dependabot-automerge
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest # github-runner: sub-minute glue, no checkout
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+      - name: Approve and queue auto-merge
+        if: >-
+          steps.meta.outputs.update-type != 'version-update:semver-major' &&
+          (steps.meta.outputs.package-ecosystem == 'github_actions' ||
+           steps.meta.outputs.dependency-type == 'direct:development')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          gh pr review --approve --body "Low-risk Dependabot bump (${{ steps.meta.outputs.package-ecosystem }}, ${{ steps.meta.outputs.update-type }}): auto-merging once required checks pass." "$PR"
+          gh pr merge --auto --squash "$PR"
+      - name: Leave for a human
+        if: steps.meta.outputs.update-type == 'version-update:semver-major' || (steps.meta.outputs.package-ecosystem != 'github_actions' && steps.meta.outputs.dependency-type != 'direct:development')
+        run: echo "Not auto-merged (${{ steps.meta.outputs.package-ecosystem }}, ${{ steps.meta.outputs.dependency-type }}, ${{ steps.meta.outputs.update-type }}); the weekly DP3 run lists it after 7 days."

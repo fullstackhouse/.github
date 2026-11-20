@@ -53,3 +53,23 @@ Monthly OpenSSF Scorecard, written to the job summary. Call it from a `schedule`
 
 All tools are pinned by checksum or image digest. `trivy-selftest.yml` proves the image scan
 fails on `node:18.0.0` and passes on distroless whenever the action changes.
+
+## Dependabot auto-merge: `.github/workflows/dependabot-automerge.yml`
+
+Approves and auto-merges Dependabot PRs that bump a GitHub Action or a dev-only dependency
+by a patch or minor version, once the repo's required checks pass. Majors and runtime
+dependencies wait for a human; the weekly DP3 run lists bot PRs older than 7 days. Turn on
+"Allow auto-merge" in the repo settings.
+
+```yaml
+# .github/workflows/dependabot-automerge.yml
+name: dependabot-automerge
+on: pull_request
+permissions: {}
+jobs:
+  automerge:
+    uses: fullstackhouse/.github/.github/workflows/dependabot-automerge.yml@<sha> # main
+    permissions:
+      contents: write
+      pull-requests: write
+```
