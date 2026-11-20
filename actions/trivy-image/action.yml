@@ -35,7 +35,7 @@ runs:
         ignore=()
         [[ -f .trivyignore.yaml ]] && ignore=(--ignorefile .trivyignore.yaml)
         report=$(mktemp)
-        trivy image --quiet --scanners vuln --severity CRITICAL,HIGH --format table \
+        trivy image --quiet --scanners vuln --severity CRITICAL,HIGH --format table --table-mode detailed \
           "${ignore[@]}" "$IMAGE" > "$report" || true
         { echo "### Trivy: \`$IMAGE\`"; echo '```'; cat "$report"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
         trivy image --quiet --scanners vuln --severity CRITICAL --ignore-unfixed \
